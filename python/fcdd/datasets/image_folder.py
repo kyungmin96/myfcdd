@@ -4,6 +4,7 @@ import os.path as pt
 import numpy as np
 import torchvision.transforms as transforms
 import torch
+import PIL
 from typing import Tuple, List
 from torch import Tensor
 from torch.utils.data import Subset, DataLoader
@@ -86,7 +87,7 @@ class ADImageFolderDataset(TorchvisionDataset):
         assert nominal_label in [0, 1]
         self.nominal_label = nominal_label
         self.anomalous_label = 1 if self.nominal_label == 0 else 0
-        self.ground_truth = 2
+
 
         # precomputed mean and std of your training data
         mean, std = self.extract_mean_std(trainpath, normal_class)
@@ -130,6 +131,7 @@ class ADImageFolderDataset(TorchvisionDataset):
             normal_classes=self.normal_classes,
             transform=transform, target_transform=target_transform, all_transform=all_transform,
         )
+        print('instance:',isinstance(self._train_set, GTMapADDataset))
         if supervise_mode == 'other':  # (semi)-supervised setting
             self.balance_dataset()
         else:
@@ -174,7 +176,7 @@ class ADImageFolderDataset(TorchvisionDataset):
             transforms.ToTensor(),
         ])
         ds = ImageFolderDataset(
-            path, 'unsupervised', self.raw_shape, self.ovr, self.nominal_label, self.anomalous_label,self.ground_truth,
+            path, 'unsupervised', self.raw_shape, self.ovr, self.nominal_label, self.anomalous_label,
             normal_classes=[cls], transform=transform, target_transform=transforms.Lambda(
                 lambda x: self.anomalous_label if x in self.outlier_classes else self.nominal_label
             )
@@ -187,7 +189,7 @@ class ADImageFolderDataset(TorchvisionDataset):
         )
         loader = DataLoader(dataset=ds, batch_size=2, shuffle=False, num_workers=4, pin_memory=True)
         all_x = []
-        for x, _ in loader:
+        for x, _,_ in loader:
             all_x.append(x)
         all_x = torch.cat(all_x)
         return all_x.permute(1, 0, 2, 3).flatten(1).mean(1), all_x.permute(1, 0, 2, 3).flatten(1).std(1)
@@ -195,106 +197,93 @@ class ADImageFolderDataset(TorchvisionDataset):
 
 class ImageFolderDataset(ImageFolder,GTMapADDataset):
     def __init__(self, root: str, supervise_mode: str, raw_shape: Tuple[int, int, int], ovr: bool,
-                 nominal_label: int, anomalous_label: int, ground_truth: int,
-                 transform=None, target_transform=None, normal_classes=None, all_transform=None, img_gt_transform= None,):
+                 nominal_label: int, anomalous_label: int,
+                 transform=None, target_transform=None, normal_classes=None, all_transform=None,):
         super().__init__(root, transform=transform, target_transform=target_transform)
         if ovr:
             self.anomaly_labels = [self.target_transform(t) for t in self.targets]
         else:
             self.anomaly_labels = [
-                                   nominal_label if f.split(os.sep)[-2].lower() in ['normal', 'nominal']  else ground_truth if f.split(os.sep)[-2].lower() in ['ground_truth']   else anomalous_label
+                                   nominal_label if f.split(os.sep)[-2].lower() in ['normal', 'nominal'] else anomalous_label
                                    for f, _ in self.samples
                                    ]
         self.normal_classes = normal_classes
         self.all_transform = all_transform  # contains the OnlineSupervisor
         self.supervise_mode = supervise_mode
         self.raw_shape = torch.Size(raw_shape)
-        self.gt= None
         self.anomalous_label = anomalous_label
         self.nominal_label = nominal_label
-        
+        '''self.gt = None'''
 
     def __getitem__(self, index: int) -> Tuple[Tensor, int, Tensor]:
+        
         target = self.anomaly_labels[index]
-        print('target:',target)
-
+            
         if self.target_transform is not None:
             pass  # already applied since we use self.anomaly_labels instead of self.targets
-
-
-        print('all:',self.all_transform )
 
         if self.all_transform is not None:
             replace = random.random() < 0.5
             if replace:
                 if self.supervise_mode not in ['malformed_normal', 'malformed_normal_gt']:
-                    img, gt, target = self.all_transform(
-                        torch.empty(self.raw_shape), torch.empty(self.raw_shape), target, replace=replace
+                    img, _, target = self.all_transform(
+                        torch.empty(self.raw_shape), None, target, replace=replace
                     )
                 else:
                     path, _ = self.samples[index]
                     img = to_tensor(self.loader(path)).mul(255).byte()
-                    img, gt, target = self.all_transform(img, gt, target, replace=replace)
+                    img, _, target = self.all_transform(img, None, target, replace=replace)
                 img = to_pil_image(img)
             else:
                 path, _ = self.samples[index]
-                print('path1:',path)
-                gt=None
-                gt = to_pil_image(gt)
-                j=0
-                k=0
-                p=0
-                for i in range(0,len(path)-1,-1):
-                    if path[i] == '/':
-                        j+=1
-                    if j==13:
-                        k = i
-                    if j==14:
-                        p = i
-        
-                st=''
-                for t in range(k,p+1):
-                     st = st + path[t]  
-                st = str(st)
-                if st == 'ground_truth':
-                    gt= self.loader(path)
-                else:
-                    img = self.loader(path)
+                img = self.loader(path)
                 
 
         else:
-            path, _ = self.samples[index]
-            print('path2:',path)
-            gt=None
-            gt = to_pil_image(gt)
-            j=0
-            k=0
-            p=0
-            for i in range(0,len(path)-1,-1):
-                if path[i] == '/':
-                    j+=1
-                if j==13:
-                    k = i
-                if j==14:
-                    p = i
-        
-            st=''
-            for t in range(k,p+1):
-                    st = st + path[t]  
-            st = str(st)
-            if st == 'ground_truth':
-                gt= self.loader(path)
-            else:
-                img = self.loader(path)
+            path_orig, _ = self.samples[index]
+                
+            _,folder= os.path.split(os.path.dirname(path_orig))
+            '''piece,_ = os.path.split(temp_piece)'''
+            
+            '''if folder != 'ground_truth' :
+                gtdir = os.path.join(piece, 'ground_truth')
+                _,temptemp = os.path.split(path_orig)
+                name,_ = os.path.splitext(temptemp)
+                masked_name = str(name) + '_mask.png'
+                path2 = os.path.join(gtdir, masked_name)
+                img = self.loader(path_orig)
+                tensor_img = to_tensor(self.loader(path_orig)).mul(255).byte()
 
+                if folder == 'normal':
+                    gt = torch.zeros_like(tensor_img)
+                else:
+                    gt = self.loader(path2)
+
+            else :
+                return'''
+            
+            '''gtdir = os.path.join(piece, 'ground_truth')'''
+            _,temptemp = os.path.split(path_orig)
+            name,_ = os.path.splitext(temptemp)
+            masked_name = str(name) + '_mask.png'
+            path2 = os.path.join('/content/drive/My Drive/Colab Notebooks/논문/fcdd/python/data/datasets/ground_truth', masked_name)
+
+            img = self.loader(path_orig)
+            tensor_img = to_tensor(self.loader(path_orig)).mul(255).byte()
+
+            if folder == 'normal':
+                gt = torch.zeros_like(tensor_img)
+
+            else:
+                gt = self.loader(path2)
+                  
         if self.transform is not None:
             img = self.transform(img)
-            gt = self.transform(gt)
 
-        if self.nominal_label != 0:
+        '''if self.nominal_label != 0:
             gt[gt == 0] = -3  # -3 is chosen arbitrarily here
             gt[gt == 1] = self.anomalous_label
-            gt[gt == -3] = self.nominal_label
+            gt[gt == -3] = self.nominal_label'''
 
         return img, target, gt
 
